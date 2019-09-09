@@ -17,7 +17,7 @@ class embed(torch.nn.Module):
   def forward(self, x):
     xs = x.split(" ")
     vectors = []
-    for word in xs: 
+    for word in xs:
       lookup = torch.tensor([self.word_to_ix[word]], dtype=torch.long)
       vectors.append(self.embeds(lookup))
     return torch.stack(vectors, 0).view(-1, self.embedding_dim)
@@ -122,9 +122,10 @@ embedder = embed(vocab, model_dim)
 t = transformer(model_dim, 4, 4, max_length, vocab_size)
 criterion = CrossEntropyLoss(reduction='sum')
 optimizer = torch.optim.Adam(t.parameters(), lr=1e-4)
+onehot = torch.FloatTensor(10, vocab_size)
 
 # Train
-for _ in range(1000):
+for i in range(1000):
   s='the cat the cat the the cat the cat the'
   words = s.split(' ')
   target = []
@@ -132,14 +133,23 @@ for _ in range(1000):
   for word in words:
     target.append(vocab[word])
   target = torch.tensor(target)
+  onehot.zero_()
+  onehot_targets = onehot.scatter_(1, target.view(-1, 1), 1).long()
 
-  values, indexes = t(embedder(s)).max(1)
+  pred = t(embedder(s))
+  values, indexes = pred.max(1)
+  #onehot.zero_()
+  #onehot_indexes = onehot.scatter_(1, indexes.view(-1, 1), 1)
 
-  predictions = []
-  for index in indexes:
-    predictions.append(unembed[index.item()])
-  print(predictions)
-  loss = criterion(values.view(1, -1), target)
+  
+  loss = criterion(pred, target)
+  print(loss.item())
+  print(i)
+  if (i % 100 == 0):
+    predictions = []
+    for index in indexes:
+      predictions.append(unembed[index.item()])
+    print(predictions)
 
   optimizer.zero_grad()
   loss.backward()
