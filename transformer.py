@@ -3,21 +3,20 @@ import torch
 from torch.nn import *
 import torch.nn.functional as F
 import torch.optim as optim
+from dataprep import *
 
 torch.manual_seed(1)
 
 class embed(torch.nn.Module):
   def __init__(self, vocab, embedding_dim):
     super(embed, self).__init__()
-    # {"hello": 0, "world": 1}
     self.word_to_ix = vocab
     self.embeds = Embedding(len(vocab), embedding_dim)
     self.embedding_dim = embedding_dim
   
   def forward(self, x):
-    xs = x.split(" ")
     vectors = []
-    for word in xs:
+    for word in x:
       lookup = torch.tensor([self.word_to_ix[word]], dtype=torch.long)
       vectors.append(self.embeds(lookup))
     return torch.stack(vectors, 0).view(-1, self.embedding_dim)
@@ -74,6 +73,7 @@ class transformer(torch.nn.Module):
     self.decode_att = []
     self.decode_linear = []
     self.softmax = Softmax()
+    self.dropout = torch.nn.Dropout(p=0.1)
     self.layer_norm = LayerNorm([self.max_length, self.model_dim])
     
     for _ in range(n):
@@ -97,60 +97,64 @@ class transformer(torch.nn.Module):
       out = self.layer_norm(self.encode_att[i](x, x, x) + identity)
 
       identity = out
-      out = self.layer_norm(self.encode_linear[i](out) + identity)
+      out = self.layer_norm(self.dropout(self.encode_linear[i](out)) + identity)
       
       identity = outputs
-      d_out = self.layer_norm(self.decode_att_masked[i](outputs, outputs, outputs) + identity)
+      d_out = self.layer_norm(self.dropout(self.decode_att_masked[i](outputs, outputs, outputs)) + identity)
       
       identity = d_out
-      out = self.layer_norm(self.decode_att[i](d_out, out, out) + identity)
+      out = self.layer_norm(self.dropout(self.decode_att[i](d_out, out, out)) + identity)
   
       identity = out
-      out = self.layer_norm(self.decode_linear[i](out) + identity)
+      out = self.layer_norm(self.dropout(self.decode_linear[i](out)) + identity)
       outs.append(out)
     outputs = torch.cat(outs, 1)
     out = self.final_linear(outputs)
     return self.softmax(out)
 
 max_length = 10
-model_dim = 20
+model_dim = 128
 
-vocab = {'the': 0, 'cat': 1}
-unembed = {0: 'the', 1: 'cat'}
+vocab = getVocab()
+unembed = getVocabReverse()
 vocab_size = len(vocab)
 embedder = embed(vocab, model_dim)
-t = transformer(model_dim, 4, 4, max_length, vocab_size)
+t = transformer(model_dim, 8, 8, max_length, vocab_size)
 criterion = CrossEntropyLoss(reduction='sum')
-optimizer = torch.optim.Adam(t.parameters(), lr=1e-4)
+optimizer = torch.optim.Adam(t.parameters(), lr=3e-4)
 onehot = torch.FloatTensor(10, vocab_size)
 
 # Train
-for i in range(1000):
-  s='the cat the cat the the cat the cat the'
-  words = s.split(' ')
-  target = []
+total_loss = torch.Tensor(0)
+batch = 100
 
-  for word in words:
-    target.append(vocab[word])
-  target = torch.tensor(target)
-  onehot.zero_()
-  onehot_targets = onehot.scatter_(1, target.view(-1, 1), 1).long()
+for i in range(10001):
+  data, target = getData(10)
+  gold = []
+  for j in target:
+    gold.append(vocab[j])
+  gold = torch.tensor(gold)
 
-  pred = t(embedder(s))
+  pred = t(embedder(data))
   values, indexes = pred.max(1)
-  #onehot.zero_()
-  #onehot_indexes = onehot.scatter_(1, indexes.view(-1, 1), 1)
 
-  
-  loss = criterion(pred, target)
+  loss = criterion(pred, gold)
+  total_loss += loss
   print(loss.item())
-  print(i)
-  if (i % 100 == 0):
+  if (i % batch == 0):
     predictions = []
     for index in indexes:
       predictions.append(unembed[index.item()])
-    print(predictions)
+    print('target', target)
+    print('total loss', total_loss)
+    print('predictions', predictions)
+    print('softmax', pred)
+    print(pred.max(0), pred.max(1))
 
-  optimizer.zero_grad()
-  loss.backward()
-  optimizer.step()
+    optimizer.zero_grad()
+    torch.div(total_loss, torch.tensor(batch)).backward()
+    optimizer.step()
+
+    total_loss = Variable(torch.Tensor(0))
+
+  
