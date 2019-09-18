@@ -1,5 +1,6 @@
 from __future__ import division
 import torch
+import torch.nn as nn
 from torch.nn import *
 import torch.nn.functional as F
 import torch.optim as optim
@@ -8,22 +9,15 @@ from dataprep import *
 torch.manual_seed(1)
 
 class embed(torch.nn.Module):
-  def __init__(self, vocab, embedding_dim):
+  def __init__(self, max_length, vocab_length, embedding_dim):
     super(embed, self).__init__()
-    self.word_to_ix = vocab
-    self.embeds = Embedding(len(vocab), embedding_dim)
+    self.embeds = Embedding(vocab_length, embedding_dim)
     self.embedding_dim = embedding_dim
+    self.max_length = max_length
+    self.batch_size = batch_size
   
   def forward(self, x):
-    vectors = []
-    for word in x:
-      lookup = torch.tensor([self.word_to_ix[word]], dtype=torch.long)
-      vectors.append(self.embeds(lookup))
-    return torch.stack(vectors, 0).view(-1, self.embedding_dim)
-
-  #def getPositionalEmbeddings(x):
-      
-    
+    return self.embeds(x).view(-1, self.max_length, self.embedding_dim)
 
 class scaledDotProductAttention(torch.nn.Module):
   def __init__(self):
@@ -31,7 +25,7 @@ class scaledDotProductAttention(torch.nn.Module):
     self.softmax = Softmax()
 
   def forward(self, q, k, v, dk):
-    out = torch.div(q.mm(k.t()), dk**0.5).mm(v)
+    out = torch.div(q.bmm(torch.transpose(k, 2, 1)), dk**0.5).bmm(v)
     return self.softmax(out)
 
 class multiheadAttention(torch.nn.Module):
@@ -42,9 +36,9 @@ class multiheadAttention(torch.nn.Module):
     self.dk = model_dim // h
     self.dv = model_dim // h
     self.scaledDotProductAttention = scaledDotProductAttention()
-    self.wq = []
-    self.wk = []
-    self.wv = []
+    self.wq = nn.ModuleList()
+    self.wk = nn.ModuleList()
+    self.wv = nn.ModuleList()
     self.wo = Linear(h * self.dv, model_dim)
 
     for _ in range(self.h):
@@ -57,21 +51,22 @@ class multiheadAttention(torch.nn.Module):
     # We can do this in parallel
     for i in range(self.h):
       heads.append(self.scaledDotProductAttention(self.wq[i](q), self.wk[i](k), self.wv[i](v), self.dk))
-    heads = torch.cat(heads, 1)
+    heads = torch.cat(heads, 2)
     return self.wo(heads)
 
 class transformer(torch.nn.Module):
-  def __init__(self, model_dim, n, h, max_length, vocab_size):
+  def __init__(self, batch_size, model_dim, n, h, max_length, vocab_size):
     super(transformer, self).__init__()
     self.model_dim = model_dim
     self.max_length = max_length
     self.n = n
     self.h = h
-    self.encode_att = []
-    self.encode_linear = []
-    self.decode_att_masked = []
-    self.decode_att = []
-    self.decode_linear = []
+    self.batch_size = batch_size
+    self.encode_att = nn.ModuleList()
+    self.encode_linear = nn.ModuleList()
+    self.decode_att_masked = nn.ModuleList()
+    self.decode_att = nn.ModuleList()
+    self.decode_linear = nn.ModuleList()
     self.softmax = Softmax()
     self.dropout = torch.nn.Dropout(p=0.1)
     self.layer_norm = LayerNorm([self.max_length, self.model_dim])
@@ -88,7 +83,7 @@ class transformer(torch.nn.Module):
 
   def forward(self, x):
     identity = x
-    start_token = torch.zeros(self.max_length, self.model_dim, requires_grad=False)
+    start_token = torch.zeros(self.batch_size, self.max_length, self.model_dim, requires_grad=False)
     outs = []
     outputs = start_token
     # Should do in parallel
@@ -108,38 +103,33 @@ class transformer(torch.nn.Module):
       identity = out
       out = self.layer_norm(self.dropout(self.decode_linear[i](out)) + identity)
       outs.append(out)
-    outputs = torch.cat(outs, 1)
+    outputs = torch.cat(outs, 2)
     out = self.final_linear(outputs)
     return self.softmax(out)
 
 max_length = 10
+batch_size = 64
 model_dim = 128
 
 vocab = getVocab()
 unembed = getVocabReverse()
-vocab_size = len(vocab)
-embedder = embed(vocab, model_dim)
-t = transformer(model_dim, 8, 8, max_length, vocab_size)
+vocab_length = len(vocab)
+embedder = embed(max_length, vocab_length, model_dim)
+t = transformer(batch_size, model_dim, 8, 8, max_length, vocab_length)
 criterion = CrossEntropyLoss(reduction='sum')
-optimizer = torch.optim.Adam(t.parameters(), lr=3e-4)
-onehot = torch.FloatTensor(10, vocab_size)
+optimizer = torch.optim.SparseAdam(t.parameters(), lr=3e-4)
 
 # Train
 total_loss = torch.Tensor(0)
 batch = 100
 
 for i in range(10001):
-  data, target = getData(10)
-  gold = []
-  for j in target:
-    gold.append(vocab[j])
-  gold = torch.tensor(gold)
+  data, target = getData(batch_size, max_length)
 
   pred = t(embedder(data))
-  values, indexes = pred.max(1)
+  values, indexes = pred.max(2)
 
-  loss = criterion(pred, gold)
-  total_loss += loss
+  loss = criterion(pred, target)
   print(loss.item())
   if (i % batch == 0):
     predictions = []
@@ -152,9 +142,8 @@ for i in range(10001):
     print(pred.max(0), pred.max(1))
 
     optimizer.zero_grad()
-    torch.div(total_loss, torch.tensor(batch)).backward()
+    loss.backward()
     optimizer.step()
 
-    total_loss = Variable(torch.Tensor(0))
 
   
