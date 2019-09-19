@@ -16,7 +16,7 @@ def getVocabReverse():
 def getData(batch, length):
   forward = random.choices(embedded_words, k=batch*length)
   reverse = forward.copy()
-  reverse.reverse()
+  #reverse.reverse()
   
   return torch.LongTensor(forward), torch.LongTensor(reverse)
 

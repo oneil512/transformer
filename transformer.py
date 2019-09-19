@@ -105,7 +105,7 @@ class transformer(torch.nn.Module):
       outs.append(out)
     outputs = torch.cat(outs, 2)
     out = self.final_linear(outputs)
-    return self.softmax(out)
+    return out
 
 max_length = 10
 batch_size = 64
@@ -117,7 +117,7 @@ vocab_length = len(vocab)
 embedder = embed(max_length, vocab_length, model_dim)
 t = transformer(batch_size, model_dim, 8, 8, max_length, vocab_length)
 criterion = CrossEntropyLoss(reduction='sum')
-optimizer = torch.optim.SparseAdam(t.parameters(), lr=3e-4)
+optimizer = torch.optim.Adam(t.parameters(), lr=3e-4)
 
 # Train
 total_loss = torch.Tensor(0)
@@ -129,21 +129,21 @@ for i in range(10001):
   pred = t(embedder(data))
   values, indexes = pred.max(2)
 
-  loss = criterion(pred, target)
+  loss = criterion(torch.transpose(pred, 1, 2), target.view(batch_size, max_length)) / batch_size
   print(loss.item())
-  if (i % batch == 0):
-    predictions = []
-    for index in indexes:
-      predictions.append(unembed[index.item()])
-    print('target', target)
-    print('total loss', total_loss)
-    print('predictions', predictions)
-    print('softmax', pred)
-    print(pred.max(0), pred.max(1))
+  #if (i % batch == 0):
+  #  predictions = []
+  #  for index in indexes:
+  #    predictions.append(unembed[index.item()])
+  #  print('target', target)
+  #  print('total loss', total_loss)
+  #  print('predictions', predictions)
+  #  print('softmax', pred)
+  #  print(pred.max(0), pred.max(1))
 
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+  optimizer.zero_grad()
+  loss.backward()
+  optimizer.step()
 
 
   
