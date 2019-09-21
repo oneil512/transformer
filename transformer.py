@@ -11,7 +11,7 @@ torch.manual_seed(1)
 class embed(torch.nn.Module):
   def __init__(self, max_length, vocab_length, embedding_dim):
     super(embed, self).__init__()
-    self.embeds = Embedding(vocab_length, embedding_dim)
+    self.embeds = Embedding(vocab_length, embedding_dim,  sparse=False)
     self.embedding_dim = embedding_dim
     self.max_length = max_length
     self.batch_size = batch_size
@@ -62,50 +62,42 @@ class transformer(torch.nn.Module):
     self.n = n
     self.h = h
     self.batch_size = batch_size
-    self.encode_att = nn.ModuleList()
-    self.encode_linear = nn.ModuleList()
-    self.decode_att_masked = nn.ModuleList()
-    self.decode_att = nn.ModuleList()
-    self.decode_linear = nn.ModuleList()
+    self.encode_att = nn.ModuleList([multiheadAttention(model_dim, h) for _ in range(self.n)])
+    self.encode_linear = nn.ModuleList([Sequential(Linear(model_dim, model_dim), ReLU(), Linear(model_dim, model_dim), ReLU()) for _ in range(self.n)])
+    self.decode_att_masked = nn.ModuleList([multiheadAttention(model_dim, h) for _ in range(self.n)])
+    self.decode_att = nn.ModuleList([multiheadAttention(model_dim, h) for _ in range(self.n)])
+    self.decode_linear = nn.ModuleList([Sequential(Linear(model_dim, model_dim), ReLU(), Linear(model_dim, model_dim), ReLU()) for _ in range(self.n)])
     self.softmax = Softmax()
     self.dropout = torch.nn.Dropout(p=0.1)
     self.layer_norm = LayerNorm([self.max_length, self.model_dim])
     
-    for _ in range(n):
-      self.encode_att.append(multiheadAttention(model_dim, h))
-      self.encode_linear.append(Sequential(Linear(model_dim, model_dim), ReLU(), Linear(model_dim, model_dim), ReLU())) 
-
-      self.decode_att_masked.append(multiheadAttention(model_dim, h))
-      self.decode_att.append(multiheadAttention(model_dim, h))
-      self.decode_linear.append(Sequential(Linear(model_dim, model_dim), ReLU(), Linear(model_dim, model_dim), ReLU()))
-
-    self.final_linear = Linear(self.n * model_dim, vocab_size)
+    self.final_linear = Linear(model_dim, vocab_size)
 
   def forward(self, x):
     identity = x
     start_token = torch.zeros(self.batch_size, self.max_length, self.model_dim, requires_grad=False)
     outs = []
     outputs = start_token
-    # Should do in parallel
     for i in range(self.n):
 
       out = self.layer_norm(self.encode_att[i](x, x, x) + identity)
 
       identity = out
       out = self.layer_norm(self.dropout(self.encode_linear[i](out)) + identity)
-      
+      x = out
+
+    for i in range(self.n):
       identity = outputs
       d_out = self.layer_norm(self.dropout(self.decode_att_masked[i](outputs, outputs, outputs)) + identity)
       
       identity = d_out
-      out = self.layer_norm(self.dropout(self.decode_att[i](d_out, out, out)) + identity)
-  
+      out = self.layer_norm(self.dropout(self.decode_att[i](d_out, x, x)) + identity)
+
       identity = out
       out = self.layer_norm(self.dropout(self.decode_linear[i](out)) + identity)
-      outs.append(out)
-    outputs = torch.cat(outs, 2)
-    out = self.final_linear(outputs)
-    return out
+      
+    outputs = self.final_linear(x)
+    return outputs
 
 max_length = 10
 batch_size = 64
