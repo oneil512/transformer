@@ -73,6 +73,21 @@ class transformer(torch.nn.Module):
     
     self.final_linear = Linear(model_dim, vocab_size)
 
+  def decode(self, outputs, pos, encoder_outputs):
+    for i in range(self.n):
+      identity = outputs
+      out = self.layer_norm(self.dropout(self.decode_att_masked[i](outputs, outputs, outputs)) + identity)
+      
+      identity = out
+      out = self.layer_norm(self.dropout(self.decode_att[i](encoder_outputs, outputs, outputs)) + identity)
+
+      identity = out
+      out = self.layer_norm(self.dropout(self.decode_linear[i](out)) + identity)
+      
+    outputs = self.final_linear(out)
+    return outputs[:, pos]
+
+
   def forward(self, x):
     identity = x
     start_token = torch.zeros(self.batch_size, self.max_length, self.model_dim, requires_grad=False)
@@ -86,18 +101,16 @@ class transformer(torch.nn.Module):
       out = self.layer_norm(self.dropout(self.encode_linear[i](out)) + identity)
       x = out
 
-    for i in range(self.n):
-      identity = outputs
-      d_out = self.layer_norm(self.dropout(self.decode_att_masked[i](outputs, outputs, outputs)) + identity)
-      
-      identity = d_out
-      out = self.layer_norm(self.dropout(self.decode_att[i](d_out, x, x)) + identity)
+    pos = 1
+    next_element = self.decode(outputs, pos, x)
+    torch.cat((outputs, next_element.view(64, -1, 1)), 2)
+    while next_element.item() != 0:
+      next_element = self.decode(outputs, pos)
+      torch.cat((outputs, next_element), 0)
+      print(outputs)
 
-      identity = out
-      out = self.layer_norm(self.dropout(self.decode_linear[i](out)) + identity)
-      
-    outputs = self.final_linear(x)
     return outputs
+
 
 max_length = 10
 batch_size = 64
